@@ -1,0 +1,6 @@
+cp app-layout-modern.blade.php resources/views/layouts/app.blade.php
+
+cp dashboard-index.blade.php resources/views/dashboard/index.blade.php
+
+cp dashboard-controller.php app/Http/Controllers/DashboardController.php
+
