@@ -1,5 +1,7 @@
 @extends('layouts.app')
+
 @section('title', 'Daftar Customer')
+
 @section('content')
 <div class="container-fluid">
     <div class="row mb-4">
@@ -20,7 +22,8 @@
         </div>
     @endif
 
-    <div class="card">
+    {{-- Card + tabel berada di tengah area konten --}}
+    <div class="card mx-auto" style="max-width: 1200px;">
         <div class="card-body">
             <div class="table-responsive">
                 <table class="table table-hover">
@@ -49,7 +52,7 @@
                                     <a href="{{ route('customer.edit', $customer->IdCustomer) }}" class="btn btn-sm btn-warning">
                                         <i class="bi bi-pencil"></i>
                                     </a>
-                                    <form action="{{ route('customer.destroy', $customer->IdCustomer) }}" method="POST" style="display: inline;">
+                                    <form action="{{ route('customer.destroy', $customer->IdCustomer) }}" method="POST" style="display:inline;">
                                         @csrf
                                         @method('DELETE')
                                         <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Yakin ingin menghapus?')">
@@ -66,6 +69,7 @@
                     </tbody>
                 </table>
             </div>
+
             <div class="mt-3">
                 {{ $customers->links() }}
             </div>

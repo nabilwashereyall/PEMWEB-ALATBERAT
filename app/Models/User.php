@@ -7,19 +7,30 @@ use Illuminate\Notifications\Notifiable;
 
 class User extends Authenticatable
 {
-    use Notifiable;
+    use HasFactory, Notifiable;
 
-    protected $table = 'users';
-    protected $primaryKey = 'IdUser';  // Sesuaikan dengan nama primary key di tabel
-    public $incrementing = false;
-    public $timestamps = false;
+    protected $table = 'Users';          // karena nama tabel kamu `Users`
+    protected $primaryKey = 'IdUser';    // primary key di tabel
 
     protected $fillable = [
-        'username',
-        'password',
+        'Username',
+        'Password',
+        'Email',
+        'NoTelepon',
+        'Alamat',
+        'Kota',
+        'Role',
+        'IsActive',
     ];
 
     protected $hidden = [
-        'password',
+        'Password',
+        'remember_token',
     ];
+
+    // kalau pakai Laravel default hashing:
+    public function setPasswordAttribute($value)
+    {
+        $this->attributes['Password'] = bcrypt($value);
+    }
 }

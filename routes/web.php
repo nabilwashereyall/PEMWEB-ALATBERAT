@@ -2,8 +2,12 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CustomerController;
+use App\Helpers\InvoiceHelper;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use App\Http\Controllers\CustomerOrderController;
+
 
 // ============================================================
 // PUBLIC ROUTES
@@ -29,24 +33,31 @@ Route::middleware('guest')->group(function () {
             'username' => 'required|string|min:3|unique:users,Username',
             'email' => 'required|email|unique:users,Email',
             'password' => 'required|string|min:6|confirmed',
+            'NoTelepon' => 'required|string|max:15',
+            'Alamat' => 'required|string',
+            'Kota' => 'required|string|max:50',
         ]);
     
-        // Insert user dan dapatkan IdUser
         $idUser = DB::table('users')->insertGetId([
             'Username' => $data['username'],
             'Email' => $data['email'],
             'Password' => Hash::make($data['password']),
             'Role' => 'user',
             'IsActive' => 1,
+            'NoTelepon' => $data['NoTelepon'],
+            'Alamat' => $data['Alamat'],
+            'Kota' => $data['Kota'],
             'CreatedAt' => now(),
             'UpdatedAt' => now(),
-        ], 'IdUser');  // Specify primary key
+        ], 'IdUser');
     
-        // Buat customer record
         DB::table('customer')->insert([
             'NamaCustomer' => $data['username'],
             'Email' => $data['email'],
             'IdUser' => $idUser,
+            'NoTelepon' => $data['NoTelepon'],
+            'Alamat' => $data['Alamat'],
+            'Kota' => $data['Kota'],
             'CreatedAt' => now(),
             'UpdatedAt' => now(),
         ]);
@@ -54,7 +65,7 @@ Route::middleware('guest')->group(function () {
         return redirect('/login')->with('success', 'Registrasi berhasil! Silakan login');
     })->name('register.post');
     
-    
+    Route::post('/customer/register-store', [CustomerController::class, 'registerStore'])->name('customer.register-store');
 });
 
 // ============================================================
@@ -66,29 +77,63 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 // PROTECTED ROUTES (Require Login + Role Check)
 // ============================================================
 Route::middleware('App\Http\Middleware\CheckUserRole')->group(function () {
+    
+    // ============================================================
+    // CUSTOMER REGISTRATION ROUTE
+    // ============================================================
+    Route::post('/customer/register-store', [CustomerController::class, 'registerStore'])->name('customer.register-store');
+    
 // ============================================================
 // CUSTOMER ORDER ROUTES
 // ============================================================
 
-// GET - Tampilkan halaman order
 Route::get('/customer-order', function () {
+    // data alat untuk pilihan di form
     $alatBerat = DB::table('AlatBerat')->get();
-    return view('customer-order.index', ['alatBerat' => $alatBerat]);
+
+    // cari IdCustomer dari user yang login
+    $idCustomer = DB::table('customer')
+        ->where('IdUser', session('user_id'))
+        ->value('IdCustomer');
+
+    // kalau customer belum terdaftar, kirim view tanpa orders
+    if (!$idCustomer) {
+        $orders = collect(); // koleksi kosong
+    } else {
+        $orders = DB::table('PendingOrder')
+            ->leftJoin('PendingOrderDetail', 'PendingOrder.IdPendingOrder', '=', 'PendingOrderDetail.IdPendingOrder')
+            ->leftJoin('AlatBerat', 'PendingOrderDetail.IdAlatBerat', '=', 'AlatBerat.IdAlatBerat')
+            ->where('PendingOrder.IdCustomer', $idCustomer)
+            ->orderBy('PendingOrder.Tanggal', 'desc')
+            ->select(
+                'PendingOrder.*',
+                'PendingOrderDetail.TanggalAwalSewa',
+                'PendingOrderDetail.TanggalAkhirSewa',
+                'PendingOrderDetail.DurasiHari',
+                'PendingOrderDetail.SubtotalDetail',
+                'AlatBerat.NamaAlatBerat'
+            )
+            ->paginate(10);
+    }
+
+    return view('customer-order.index', [
+        'alatBerat' => $alatBerat,
+        'orders'    => $orders,
+    ]);
 })->name('customer-order.index');
 
-// POST - Process order
 Route::post('/customer-order', function () {
     $data = request()->validate([
         'IdAlatBerat' => 'required|exists:AlatBerat,IdAlatBerat',
         'TanggalAwalSewa' => 'required|date',
-        'TanggalAkhirSewa' => 'required|date|after_or_equal:TanggalAwalSewa',
+        'TanggalAkhirSewa' => 'required|date|after:TanggalAwalSewa',
+        'Account' => 'required|string|exists:Bank,Account',
     ]);
 
     $lastOrder = DB::table('PendingOrder')->orderBy('NoOrder', 'desc')->first();
     $lastNum = $lastOrder ? intval(substr($lastOrder->NoOrder, 3)) : 0;
     $noOrder = 'ORD' . str_pad($lastNum + 1, 6, '0', STR_PAD_LEFT);
 
-    // Dapatkan IdCustomer berdasarkan IdUser
     $customer = DB::table('customer')
         ->where('IdUser', session('user_id'))
         ->first();
@@ -119,26 +164,29 @@ Route::post('/customer-order', function () {
             ->where('IdAlatBerat', $data['IdAlatBerat'])
             ->first();
 
-        $awal = \Carbon\Carbon::parse($data['TanggalAwalSewa']);
-        $akhir = \Carbon\Carbon::parse($data['TanggalAkhirSewa']);
-        $durasi = $akhir->diffInDays($awal) + 1;
-        $subtotal = $alat->HargaSewa * $durasi;
+        $awal = \Carbon\Carbon::createFromFormat('Y-m-d', $data['TanggalAwalSewa']);
+        $akhir = \Carbon\Carbon::createFromFormat('Y-m-d', $data['TanggalAkhirSewa']);
+        $durasi = max(1, $akhir->diffInDays($awal) + 1);
+
+        $hargaSewa = (float) ($alat->HargaSewa ?? 0);
+        $subtotal = max(0, $hargaSewa * $durasi);
 
         DB::table('PendingOrderDetail')->insert([
             'IdPendingOrder' => $idPendingOrder,
             'IdAlatBerat' => $data['IdAlatBerat'],
+            'Account' => $data['Account'],
             'TanggalAwalSewa' => $data['TanggalAwalSewa'],
             'TanggalAkhirSewa' => $data['TanggalAkhirSewa'],
-            'DurasiHari' => $durasi,
-            'SubtotalDetail' => $subtotal,
+            'DurasiHari' => (int) $durasi,
+            'SubtotalDetail' => (float) $subtotal,
             'CreatedAt' => now(),
             'UpdatedAt' => now(),
         ]);
 
         DB::commit();
 
-        return redirect('/customer-order')
-            ->with('success', 'Alat berhasil ditambahkan ke pesanan Anda. Pesanan Anda: ' . $noOrder);
+        return redirect()->route('customer-order.index')
+            ->with('success', 'Pesanan berhasil dibuat. No Order: ' . $noOrder);
 
     } catch (\Exception $e) {
         DB::rollBack();
@@ -146,7 +194,7 @@ Route::post('/customer-order', function () {
     }
 })->name('customer-order.store');
 
-    
+
 
     // ============================================================
     // DASHBOARD ROUTE
@@ -172,10 +220,10 @@ Route::post('/customer-order', function () {
             ->where('Status', 'Pending')
             ->count();
 
-        $totalRevenue = DB::table('invoice')
+        $totalRevenue = (float) (DB::table('invoice')
             ->whereMonth('Tanggal', $currentMonth)
             ->whereYear('Tanggal', $currentYear)
-            ->sum('TotalAmount') ?? 0;
+            ->sum('TotalAmount') ?? 0);
 
         $salesToday = DB::select("
             SELECT 
@@ -270,9 +318,9 @@ Route::post('/customer-order', function () {
             ->where('InvoiceDetail.NoInvoice', $NoInvoice)
             ->get();
 
-        $subtotal = $items->sum('SubtotalDetail') ?? 0;
+        $subtotal = (float) ($items->sum('SubtotalDetail') ?? 0);
         $ppn = $subtotal * 0.10;
-        $total = $subtotal + $ppn;
+        $total = max(0, $subtotal + $ppn);
 
         DB::table('invoice')
             ->where('NoInvoice', $NoInvoice)
@@ -301,7 +349,7 @@ Route::post('/customer-order', function () {
             ->where('InvoiceDetail.NoInvoice', $NoInvoice)
             ->get();
 
-        $subtotal = $items->sum('SubtotalDetail') ?? 0;
+        $subtotal = (float) ($items->sum('SubtotalDetail') ?? 0);
         $ppn = $subtotal * 0.10;
 
         return view('invoicedetail.print', [
@@ -371,9 +419,9 @@ Route::post('/customer-order', function () {
         ]);
 
         $data['NoInvoice'] = $NoInvoice;
-        $start = \Carbon\Carbon::parse($data['TanggalAwalSewa']);
-        $end = \Carbon\Carbon::parse($data['TanggalAkhirSewa']);
-        $data['DurasiHari'] = $start->diffInDays($end) + 1;
+        $start = \Carbon\Carbon::createFromFormat('Y-m-d', $data['TanggalAwalSewa']);
+        $end = \Carbon\Carbon::createFromFormat('Y-m-d', $data['TanggalAkhirSewa']);
+        $data['DurasiHari'] = max(1, $end->diffInDays($start) + 1);
 
         DB::table('InvoiceDetail')->insert($data);
         return redirect("/invoice/$NoInvoice")->with('success', 'Item berhasil ditambahkan');
@@ -405,9 +453,9 @@ Route::post('/customer-order', function () {
             'SubtotalDetail' => 'required|numeric|min:0',
         ]);
 
-        $start = \Carbon\Carbon::parse($data['TanggalAwalSewa']);
-        $end = \Carbon\Carbon::parse($data['TanggalAkhirSewa']);
-        $data['DurasiHari'] = $start->diffInDays($end) + 1;
+        $start = \Carbon\Carbon::createFromFormat('Y-m-d', $data['TanggalAwalSewa']);
+        $end = \Carbon\Carbon::createFromFormat('Y-m-d', $data['TanggalAkhirSewa']);
+        $data['DurasiHari'] = max(1, $end->diffInDays($start) + 1);
 
         DB::table('InvoiceDetail')
             ->where('NoInvoice', $NoInvoice)
@@ -422,23 +470,24 @@ Route::post('/customer-order', function () {
             ->where('NoInvoice', $NoInvoice)
             ->where('IdAlatBerat', $IdAlatBerat)
             ->delete();
-
-        $subtotal = DB::table('InvoiceDetail')
+    
+        $subtotal = (float) (DB::table('InvoiceDetail')
             ->where('NoInvoice', $NoInvoice)
-            ->sum('SubtotalDetail') ?? 0;
+            ->sum('SubtotalDetail') ?? 0);
         $ppn = $subtotal * 0.10;
-        $total = $subtotal + $ppn;
-
+        $total = max(0, $subtotal + $ppn);
+    
         DB::table('invoice')
             ->where('NoInvoice', $NoInvoice)
             ->update([
                 'TotalAmount' => $total,
                 'UpdatedAt' => now(),
             ]);
-
+    
         return redirect()->route('invoice.show', $NoInvoice)
             ->with('success', 'Item berhasil dihapus');
     })->name('invoicedetail.destroy');
+    
 
     // ============================================================
     // CUSTOMER ROUTES
@@ -694,9 +743,9 @@ Route::post('/customer-order', function () {
             ->where('PendingOrderDetail.IdPendingOrder', $IdPendingOrder)
             ->get();
 
-        $subtotal = $items->sum('SubtotalDetail') ?? 0;
+        $subtotal = (float) ($items->sum('SubtotalDetail') ?? 0);
         $ppn = $subtotal * 0.10;
-        $total = $subtotal + $ppn;
+        $total = max(0, $subtotal + $ppn);
 
         return view('pending-order.show', [
             'order' => $order,
@@ -711,35 +760,37 @@ Route::post('/customer-order', function () {
         $pendingOrder = DB::table('PendingOrder')
             ->where('IdPendingOrder', $IdPendingOrder)
             ->first();
-
+    
         if (!$pendingOrder) abort(404);
-
+    
         try {
             DB::beginTransaction();
-
+    
             $lastInvoice = DB::table('invoice')->orderBy('NoInvoice', 'desc')->first();
             $lastNum = $lastInvoice ? intval(substr($lastInvoice->NoInvoice, 3)) : 0;
             $noInvoice = 'INV' . str_pad($lastNum + 1, 6, '0', STR_PAD_LEFT);
-
+    
             $pendingItems = DB::table('PendingOrderDetail')
                 ->where('IdPendingOrder', $IdPendingOrder)
                 ->get();
-
-            $subtotal = $pendingItems->sum('SubtotalDetail') ?? 0;
+    
+            $subtotal = (float) ($pendingItems->sum('SubtotalDetail') ?? 0);
             $ppn = $subtotal * 0.10;
-            $total = $subtotal + $ppn;
-
+            $total = max(0, $subtotal + $ppn);
+    
+            $account = $pendingItems->first()?->Account ?? 'DEFAULT';
+    
             DB::table('invoice')->insert([
                 'NoInvoice' => $noInvoice,
                 'IdCustomer' => $pendingOrder->IdCustomer,
                 'Tanggal' => now(),
-                'Account' => 'DEFAULT',
+                'Account' => $account,
                 'TotalAmount' => $total,
                 'Status' => 'Pending',
                 'CreatedAt' => now(),
                 'UpdatedAt' => now(),
             ]);
-
+    
             foreach ($pendingItems as $item) {
                 DB::table('InvoiceDetail')->insert([
                     'NoInvoice' => $noInvoice,
@@ -752,25 +803,25 @@ Route::post('/customer-order', function () {
                     'UpdatedAt' => now(),
                 ]);
             }
-
+    
             DB::table('PendingOrder')
                 ->where('IdPendingOrder', $IdPendingOrder)
                 ->update([
                     'Status' => 'Approved',
                     'UpdatedAt' => now(),
                 ]);
-
+    
             DB::commit();
-
+    
             return redirect('/pending-order')
                 ->with('success', 'Order berhasil di-approve dan convert ke Invoice ' . $noInvoice);
-
+    
         } catch (\Exception $e) {
             DB::rollBack();
             return back()->with('error', 'Gagal approve order: ' . $e->getMessage());
         }
     })->name('pending-order.approve');
-
+    
     Route::post('/pending-order/{IdPendingOrder}/reject', function ($IdPendingOrder) {
         $reason = request()->validate([
             'reason' => 'nullable|string|max:500'
@@ -789,6 +840,31 @@ Route::post('/customer-order', function () {
     })->name('pending-order.reject');
 
 });
+
+Route::get('/api/invoice/{NoInvoice}/total', function ($NoInvoice) {
+    $invoice = DB::table('invoice')->where('NoInvoice', $NoInvoice)->first();
+    
+    if (!$invoice) {
+        return response()->json(['total' => 0], 404);
+    }
+
+    // Hitung total dari items
+    $items = DB::table('InvoiceDetail')
+        ->where('NoInvoice', $NoInvoice)
+        ->get();
+
+    $subtotal = (float) ($items->sum('SubtotalDetail') ?? 0);
+    $ppn = $subtotal * 0.10;
+    $total = $subtotal + $ppn;
+
+    return response()->json([
+        'total' => $total,
+        'subtotal' => $subtotal,
+        'ppn' => $ppn,
+        'items_count' => $items->count()
+    ]);
+})->name('api.invoice.total');
+
 // ============================================================
 // END OF ROUTES
 // ============================================================

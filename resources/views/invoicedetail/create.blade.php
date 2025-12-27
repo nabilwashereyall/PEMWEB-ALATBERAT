@@ -141,6 +141,7 @@
 </div>
 
 <!-- JavaScript untuk Kalkulasi Otomatis -->
+<!-- JavaScript untuk Kalkulasi Otomatis -->
 <script>
 // Data harga alat berat (dari select options)
 const alatBeratData = {
@@ -209,11 +210,52 @@ function hitungSubtotal() {
     }
 }
 
+// TAMBAHAN: Load total invoice dari database
+function loadInvoiceTotal() {
+    fetch('{{ route("invoice.show", $invoice->NoInvoice) }}')
+        .then(response => response.text())
+        .then(html => {
+            // Parse HTML dan cari total amount
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            
+            // Cari elemen yang berisi total (sesuaikan selector sesuai view invoice.show kamu)
+            const totalElement = doc.querySelector('[data-total]') || 
+                                doc.querySelector('.invoice-total') ||
+                                doc.querySelector('[id*="total"]');
+            
+            if (totalElement) {
+                const totalValue = totalElement.getAttribute('data-total') || 
+                                 totalElement.textContent.replace(/[^0-9]/g, '');
+                document.getElementById('totalInvoice').textContent = 
+                    new Intl.NumberFormat('id-ID').format(totalValue);
+            }
+        })
+        .catch(err => console.log('Could not load invoice total'));
+}
+
+// TAMBAHAN: Load dari database langsung dengan AJAX
+function loadInvoiceTotalDirect() {
+    const noInvoice = '{{ $invoice->NoInvoice }}';
+    
+    fetch(`/api/invoice/${noInvoice}/total`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.total) {
+                document.getElementById('totalInvoice').textContent = 
+                    new Intl.NumberFormat('id-ID').format(data.total);
+            }
+        })
+        .catch(err => console.log('Could not load invoice total'));
+}
+
 // Initialize saat halaman dimuat
 document.addEventListener('DOMContentLoaded', function() {
     updateHargaSewa();
+    loadInvoiceTotalDirect(); // Load total dari API
 });
 </script>
+
 
 <style>
     .form-label {
